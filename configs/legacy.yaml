@@ -6,4 +6,4 @@ defaults:
   - model: gpt_xtts_v2
 
 
-device: cpu
+device: auto
