@@ -12,5 +12,8 @@ wheels/
 model/**
 outputs/**
 tmp/**
+data/**
+
+**.wav
 
 .DS_Store

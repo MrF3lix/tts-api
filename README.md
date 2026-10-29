@@ -17,7 +17,7 @@ uv run --extra legacy --extra api --extra cu132 tts-ui-api
 Interactive docs are at `/docs`. Generate speech:
 
 ```bash
-curl -F text="Grüessech mitenand" -F language=ch_be -F speaker_wav=@speaker.wav \
+curl -F text="Grüessech mitenand" -F language=ch_be -F speaker_wav=@data/ref.wav \
   http://localhost:7860/generate -o out.wav
 ```
 
