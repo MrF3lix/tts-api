@@ -11,5 +11,6 @@ wheels/
 
 model/**
 outputs/**
+tmp/**
 
 .DS_Store

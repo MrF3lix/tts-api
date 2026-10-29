@@ -27,14 +27,50 @@ legacy = [
     "torch==2.5.1",
     "torchaudio==2.5.1",
 ]
+cu126 = ["torch==2.8.0"]
+cu128 = ["torch==2.8.0"]
+cu132 = ["torch==2.15.0"]
+rocm = [
+    "torch==2.11.0",
+    "triton-rocm; platform_machine == 'x86_64' and sys_platform == 'linux'",
+]
 
 [tool.uv]
 conflicts = [
-    [{ extra = "modern" }, { extra = "legacy" }],
+    [{ extra = "modern" }, { extra = "legacy" }, { extra = "cu126" }, { extra = "cu128" }, { extra = "cu132" }, { extra = "rocm" }],
 ]
 override-dependencies = [
     "pandas>=2",
 ]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-cu128", extra = "cu128" },
+    { index = "pytorch-cu132", extra = "cu132" },
+    { index = "pytorch-rocm", extra = "rocm" },
+]
+triton-rocm = [{ index = "pytorch-rocm", extra = "rocm" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
 
 
 [project.scripts]
