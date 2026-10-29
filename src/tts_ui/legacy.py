@@ -8,7 +8,7 @@ import soundfile as sf
 from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 
-from tts_ui.xtts import LANG_MAP, INV_LANG_MAP, load_tts, resolve_device
+from tts_ui.xtts import load_tts, resolve_device
 
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -29,7 +29,7 @@ SPEAKER_RAW_WAV_BPATH = 'tmp/speaker_raw_wavs'
 OUTPUT_WAV_BPATH = 'tmp/generated_audios'
 
 
-global tts
+global tts, LANG_MAP, INV_LANG_MAP
 
 
 def generate_speech(text, speaker_wav, language):
@@ -60,7 +60,9 @@ def generate_speech(text, speaker_wav, language):
 
 
 def run(cfg):
-    global tts
+    global tts, LANG_MAP, INV_LANG_MAP
+    LANG_MAP = dict(cfg.model.languages)
+    INV_LANG_MAP = {v:k for k,v in LANG_MAP.items()}
     ensure_dirs(cfg)
     device = resolve_device(cfg.device)
 

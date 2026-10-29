@@ -17,7 +17,7 @@ import soundfile as sf
 from omegaconf import DictConfig
 
 from tts_ui import jobs
-from tts_ui.xtts import Synthesizer, load_tts, resolve_device
+from tts_ui.backends import Backend, load_backend
 
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -29,10 +29,11 @@ AVG_ALPHA = 0.2
 
 
 class Worker:
-    def __init__(self, cfg: DictConfig, synth: Synthesizer):
+    def __init__(self, cfg: DictConfig, backend: Backend):
         self.cfg = cfg.worker
-        self.model = cfg.worker.model_id
-        self.synth = synth
+        self.model_cfg = cfg.model
+        self.model = cfg.model.id
+        self.backend = backend
         self.name = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
         self.stream = jobs.task_stream(self.model)
         self.r = redis.Redis.from_url(cfg.redis_url, decode_responses=True)
@@ -49,6 +50,17 @@ class Worker:
         except redis.ResponseError as e:
             if "BUSYGROUP" not in str(e):
                 raise
+
+    def _register_model(self):
+        # the gateway learns which models exist, and what they accept, from this entry
+        info = {
+            "id": self.model,
+            "name": self.model_cfg.model_name,
+            "backend": self.model_cfg.backend,
+            "ref_text": self.model_cfg.ref_text,
+            "languages": dict(self.model_cfg.languages),
+        }
+        self.r.hset(jobs.MODELS_KEY, self.model, json.dumps(info))
 
     def _heartbeat_loop(self):
         # separate thread, so a long generation doesn't make the worker look dead
@@ -123,10 +135,11 @@ class Worker:
             if speaker_wav is None:
                 raise RuntimeError("speaker recording expired")
             seed = int(job[jobs.sample_field(index, "seed")])
-            wav = self.synth.synthesize(job["text"], job["language"], speaker_wav, seed=seed)
+            wav, sr = self.backend.synthesize(job["text"], job["language"], speaker_wav,
+                                              ref_text=job.get("ref_text") or None, seed=seed)
 
             buf = io.BytesIO()
-            sf.write(buf, wav, self.synth.sample_rate, format='WAV', subtype='PCM_16')
+            sf.write(buf, wav, sr, format='WAV', subtype='PCM_16')
             # results live as long as the job itself
             ttl = max(self.r.ttl(key), 60)
             self.rb.set(jobs.sample_key(job_id, index), buf.getvalue(), ex=ttl)
@@ -134,11 +147,11 @@ class Worker:
             elapsed = time.time() - started
             self.r.hset(key, mapping={
                 jobs.sample_field(index, "status"): "completed",
-                jobs.sample_field(index, "duration"): len(wav) / self.synth.sample_rate,
+                jobs.sample_field(index, "duration"): len(wav) / sr,
                 jobs.sample_field(index, "finished_at"): time.time(),
             })
             self._update_avg(elapsed)
-            log.info(f"Job {job_id} sample {index}: {len(wav) / self.synth.sample_rate:.1f}s audio in {elapsed:.1f}s")
+            log.info(f"Job {job_id} sample {index}: {len(wav) / sr:.1f}s audio in {elapsed:.1f}s")
         except Exception as e:
             log.exception(f"Job {job_id} sample {index} failed")
             self.r.hset(key, mapping={
@@ -159,6 +172,7 @@ class Worker:
 
     def run(self):
         self._ensure_group()
+        self._register_model()
         threading.Thread(target=self._heartbeat_loop, daemon=True).start()
         log.info(f"Worker {self.name} serving model '{self.model}'")
 
@@ -190,9 +204,8 @@ def main(cfg: DictConfig):
     # docker stop sends SIGTERM; exit normally so the heartbeat is removed and another
     # worker can take over an interrupted task without waiting for the heartbeat to expire
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    device = resolve_device(cfg.device)
-    synth = Synthesizer(load_tts(cfg.model, device), speaker_cache_size=cfg.worker.speaker_cache_size)
-    Worker(cfg, synth).run()
+    backend = load_backend(cfg.model, cfg.device, speaker_cache_size=cfg.worker.speaker_cache_size)
+    Worker(cfg, backend).run()
 
 if __name__ == "__main__":
     main()

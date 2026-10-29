@@ -11,8 +11,8 @@ server:
   host: 127.0.0.1
   port: 8000
 
-# model ids the gateway accepts; each one is served by its own workers (configs/worker.yaml)
-models: [xtts]
+# models are discovered from their workers (each registers its model config on startup);
+# this one is used when a request names no model
 default_model: xtts
 
 jobs:
@@ -30,4 +30,5 @@ jobs:
 
 limits:
   max_text_chars: 1000
+  max_ref_text_chars: 1000
   max_speaker_seconds: 60

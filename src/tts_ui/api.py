@@ -19,7 +19,6 @@ from omegaconf import DictConfig
 from pydantic import BaseModel
 
 from tts_ui import jobs
-from tts_ui.languages import LANG_MAP, resolve_language
 
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -40,6 +39,11 @@ class Language(BaseModel):
 
 class ModelInfo(BaseModel):
     id: str
+    name: str
+    backend: str
+    # whether the model uses a transcript of the reference recording: ignored | optional | required
+    ref_text: str
+    languages: list[Language]
     workers: int
 
 
@@ -49,12 +53,6 @@ def create_app(cfg: DictConfig) -> FastAPI:
     async def lifespan(app: FastAPI):
         app.state.r = redis.Redis.from_url(cfg.redis_url, decode_responses=True)
         app.state.rb = redis.Redis.from_url(cfg.redis_url)  # binary values (audio)
-        for model in cfg.models:
-            try:
-                await app.state.r.xgroup_create(jobs.task_stream(model), jobs.GROUP, id="0", mkstream=True)
-            except redis.ResponseError as e:
-                if "BUSYGROUP" not in str(e):
-                    raise
         yield
         await app.state.r.aclose()
         await app.state.rb.aclose()
@@ -63,6 +61,36 @@ def create_app(cfg: DictConfig) -> FastAPI:
 
     async def worker_count(model: str) -> int:
         return len([k async for k in app.state.r.scan_iter(match=jobs.worker_pattern(model))])
+
+    async def registered_models() -> dict[str, dict]:
+        # workers register their model (and create its task stream) on startup
+        entries = await app.state.r.hgetall(jobs.MODELS_KEY)
+        return {model_id: json.loads(info) for model_id, info in entries.items()}
+
+    async def get_model(model_id: str | None) -> dict:
+        model_id = model_id or cfg.default_model
+        models = await registered_models()
+        if model_id not in models:
+            raise HTTPException(422, f"Unknown model '{model_id}', expected one of {sorted(models)}")
+        return models[model_id]
+
+    def resolve_language(model: dict, language: str) -> str:
+        """Accept either a language code (ch_be) or its display name (Bern) of the given model."""
+        languages = model["languages"]
+        if language in languages:
+            return language
+        by_name = {name: code for code, name in languages.items()}
+        if language in by_name:
+            return by_name[language]
+        raise HTTPException(422, f"Language '{language}' is not supported by model '{model['id']}', "
+                                 f"expected one of {list(languages)}")
+
+    async def model_info(model: dict) -> ModelInfo:
+        return ModelInfo(
+            id=model["id"], name=model["name"], backend=model["backend"], ref_text=model["ref_text"],
+            languages=[Language(code=c, name=n) for c, n in model["languages"].items()],
+            workers=await worker_count(model["id"]),
+        )
 
     async def load_job(job_id: str) -> dict:
         fields = await app.state.r.hgetall(jobs.job_key(job_id))
@@ -114,19 +142,20 @@ def create_app(cfg: DictConfig) -> FastAPI:
         sf.write(buf, audio, sr, format='WAV', subtype='PCM_16')
         return buf.getvalue()
 
-    async def create_job(text, language, speaker_wav, num_samples, model, seed) -> dict:
+    async def create_job(text, language, speaker_wav, ref_text, num_samples, model_id, seed) -> dict:
         text = text.strip()
         if not text:
             raise HTTPException(422, "text must not be empty")
         if len(text) > cfg.limits.max_text_chars:
             raise HTTPException(422, f"text exceeds {cfg.limits.max_text_chars} characters")
-        try:
-            lang_tag = resolve_language(language)
-        except ValueError as e:
-            raise HTTPException(422, str(e))
-        model = model or cfg.default_model
-        if model not in cfg.models:
-            raise HTTPException(422, f"Unknown model '{model}', expected one of {list(cfg.models)}")
+        spec = await get_model(model_id)
+        model = spec["id"]
+        lang_tag = resolve_language(spec, language)
+        ref_text = (ref_text or "").strip()
+        if len(ref_text) > cfg.limits.max_ref_text_chars:
+            raise HTTPException(422, f"ref_text exceeds {cfg.limits.max_ref_text_chars} characters")
+        if spec["ref_text"] == "required" and not ref_text:
+            raise HTTPException(422, f"model '{model}' requires ref_text, the transcript of speaker_wav")
         num_samples = num_samples or cfg.jobs.default_samples
         if not 1 <= num_samples <= cfg.jobs.max_samples:
             raise HTTPException(422, f"num_samples must be between 1 and {cfg.jobs.max_samples}")
@@ -142,7 +171,7 @@ def create_app(cfg: DictConfig) -> FastAPI:
         job_id = uuid.uuid4().hex
         seeds = [seed + i if seed is not None else secrets.randbelow(2**31) for i in range(num_samples)]
         fields = {
-            "id": job_id, "model": model, "text": text, "language": lang_tag,
+            "id": job_id, "model": model, "text": text, "language": lang_tag, "ref_text": ref_text,
             "samples_total": num_samples, "created_at": time.time(), "cancelled": "0",
         }
         for i, s in enumerate(seeds):
@@ -191,26 +220,28 @@ def create_app(cfg: DictConfig) -> FastAPI:
     @app.get("/health")
     async def health():
         await app.state.r.ping()
-        return {"status": "ok", "workers": {m: await worker_count(m) for m in cfg.models}}
+        return {"status": "ok", "workers": {m: await worker_count(m) for m in await registered_models()}}
 
     @app.get("/languages", response_model=list[Language])
-    def languages():
-        return [Language(code=code, name=name) for code, name in LANG_MAP.items()]
+    async def languages(model: str | None = None):
+        """Languages of one model (the default model if none is given)."""
+        return (await model_info(await get_model(model))).languages
 
     @app.get("/models", response_model=list[ModelInfo])
     async def models():
-        return [ModelInfo(id=m, workers=await worker_count(m)) for m in cfg.models]
+        return [await model_info(m) for m in (await registered_models()).values()]
 
     @app.post("/jobs", status_code=202)
     async def submit_job(
         text: str = Form(..., description="Text to synthesize"),
         language: str = Form(..., description="Language code (e.g. ch_be) or name (e.g. Bern)"),
         speaker_wav: UploadFile = File(..., description="Reference recording of the target speaker"),
+        ref_text: str | None = Form(None, description="Transcript of speaker_wav (see ref_text in /models)"),
         num_samples: int | None = Form(None, description="Number of samples to generate (default from config)"),
-        model: str | None = Form(None, description="Model id (see /models)"),
+        model: str | None = Form(None, description="Model id (see /models); all samples use this model"),
         seed: int | None = Form(None, description="Base seed; sample i uses seed + i. Random if omitted"),
     ):
-        fields = await create_job(text, language, speaker_wav, num_samples, model, seed)
+        fields = await create_job(text, language, speaker_wav, ref_text, num_samples, model, seed)
         return JSONResponse(await job_snapshot(fields), status_code=202,
                             headers={"Location": f"/jobs/{fields['id']}"})
 
@@ -270,11 +301,12 @@ def create_app(cfg: DictConfig) -> FastAPI:
         text: str = Form(..., description="Text to synthesize"),
         language: str = Form(..., description="Language code (e.g. ch_be) or name (e.g. Bern)"),
         speaker_wav: UploadFile = File(..., description="Reference recording of the target speaker"),
+        ref_text: str | None = Form(None, description="Transcript of speaker_wav (see ref_text in /models)"),
         model: str | None = Form(None, description="Model id (see /models)"),
         seed: int | None = Form(None),
     ):
         """Blocking single-sample generation, kept for simple clients. Runs through the same queue."""
-        fields = await create_job(text, language, speaker_wav, 1, model, seed)
+        fields = await create_job(text, language, speaker_wav, ref_text, 1, model, seed)
         job_id = fields["id"]
         async for fields in wait_for_job(job_id, timeout=cfg.jobs.generate_timeout_seconds):
             pass

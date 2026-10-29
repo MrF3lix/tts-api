@@ -8,6 +8,11 @@ so N samples spread over all free workers. Per job:
     tts:job:{id}:sample:{i}       bytes  generated wav
     tts:job:{id}:events           pubsub "changed" notifications for live progress
 
+Models:
+
+    tts:models                    hash   model id -> JSON metadata (name, languages, ref_text policy),
+                                         written by the model's workers on startup
+
 Per model:
 
     tts:tasks:{model}             stream one entry per sample, consumer group "workers"
@@ -19,6 +24,9 @@ Per model:
 GROUP = "workers"
 SAMPLE_FIELDS = ("status", "seed", "task_id", "worker", "duration", "error", "started_at", "finished_at")
 FINISHED = {"completed", "failed", "cancelled"}
+
+
+MODELS_KEY = "tts:models"
 
 
 def job_key(job_id: str) -> str:
@@ -91,6 +99,7 @@ def job_view(fields: dict) -> dict:
         "model": fields["model"],
         "language": fields["language"],
         "text": fields["text"],
+        "ref_text": fields.get("ref_text") or None,
         "created_at": float(fields["created_at"]),
         "samples_total": total,
         "samples_completed": sum(s["status"] == "completed" for s in samples),

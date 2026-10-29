@@ -1,0 +1,37 @@
+id: qwen3-tts
+backend: qwen3
+model_name: Qwen3-TTS 12Hz 1.7B Base
+# Hugging Face repo id or a local directory with the downloaded weights
+pretrained: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+dtype: bfloat16
+# flash_attention_2 lowers GPU memory, but needs the flash-attn package (not installed by default)
+attn_implementation: sdpa
+# upper bound on generated audio tokens per sample; 12 tokens per second of audio, so 2048 ≈ 170s
+max_new_tokens: 2048
+# with a transcript of the reference, the model clones in ICL mode; without one it uses
+# only the speaker embedding, which gives lower cloning quality
+ref_text: optional
+# language code -> display name
+languages:
+  de: Deutsch
+  en: English
+  fr: Français
+  it: Italiano
+  es: Español
+  pt: Português
+  ru: Русский
+  zh: 中文
+  ja: 日本語
+  ko: 한국어
+# what the model expects for each code
+language_tags:
+  de: german
+  en: english
+  fr: french
+  it: italian
+  es: spanish
+  pt: portuguese
+  ru: russian
+  zh: chinese
+  ja: japanese
+  ko: korean

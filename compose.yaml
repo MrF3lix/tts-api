@@ -51,8 +51,32 @@ services:
       redis:
         condition: service_healthy
     deploy:
-      # each replica loads its own copy of the model; all share the GPU
       replicas: ${XTTS_WORKERS:-2}
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  qwen-worker:
+    build:
+      context: .
+      args:
+        EXTRAS: "--extra qwen --extra api --extra ${TORCH_EXTRA:-cu132}"
+    image: tts-ui-worker-qwen
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - hf-cache:/home/app/.cache/huggingface
+    command: ["tts-ui-worker", "model=qwen3_tts_base", "device=${DEVICE:-cuda}"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: ${QWEN_WORKERS:-1}
       resources:
         reservations:
           devices:
@@ -62,3 +86,4 @@ services:
 
 volumes:
   redis-data:
+  hf-cache:

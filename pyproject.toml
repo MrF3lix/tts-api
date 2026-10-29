@@ -25,6 +25,9 @@ legacy = [
     "transformers>=4.33,<4.61",
     "tts==0.22.0",
 ]
+qwen = [
+    "qwen-tts==0.1.1",
+]
 api = [
     "fastapi>=0.115",
     "python-multipart>=0.0.9",
@@ -46,6 +49,8 @@ rocm = [
 [tool.uv]
 conflicts = [
     [{ extra = "modern" }, { extra = "legacy" }],
+    [{ extra = "modern" }, { extra = "qwen" }],
+    [{ extra = "legacy" }, { extra = "qwen" }],
     [{ extra = "mps" }, { extra = "cu126" }, { extra = "cu128" }, { extra = "cu132" }, { extra = "rocm" }],
 ]
 override-dependencies = [

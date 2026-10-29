@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
-# One Dockerfile for both images; EXTRAS picks what gets installed:
-#   gateway: --extra api                                  (no torch / model code)
-#   worker:  --extra legacy --extra api --extra cu132     (default)
+# One Dockerfile for all images; EXTRAS picks what gets installed:
+#   gateway:      --extra api                                  (no torch / model code)
+#   xtts worker:  --extra legacy --extra api --extra cu132     (default)
+#   qwen worker:  --extra qwen --extra api --extra cu132
 ARG EXTRAS="--extra legacy --extra api --extra cu132"
 
 FROM python:3.11-slim-bookworm AS builder
@@ -30,10 +31,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 
 FROM python:3.11-slim-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# sox: used by qwen-tts for audio processing
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg sox \
     && rm -rf /var/lib/apt/lists/*
 # /app must be writable: Hydra writes its run logs to outputs/ in the working directory
-RUN useradd --create-home --uid 1000 app && mkdir /app && chown app:app /app
+# the Hugging Face cache dir exists up front, so a volume mounted there is writable by app
+RUN useradd --create-home --uid 1000 app && mkdir /app && chown app:app /app \
+    && install -d -o app -g app /home/app/.cache/huggingface
 WORKDIR /app
 # the project is installed editable, so configs/ and .project-root are found relative to src/
 COPY --from=builder --chown=app:app /app /app
