@@ -7,6 +7,7 @@ import librosa
 import gradio as gr
 import soundfile as sf
 from TTS.api import TTS
+from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
 from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 
@@ -27,6 +28,19 @@ LANG_MAP = {
 }
 
 INV_LANG_MAP = {v:k for k,v in LANG_MAP.items()}
+
+
+# stock coqui tokenizer only cleans text for a fixed language list. For the dialects,
+# clean the text with the German rules; the dialect token ([ch_be], ...) is still
+# what gets prepended in encode(), so the model conditioning is unchanged
+_preprocess_text = VoiceBpeTokenizer.preprocess_text
+
+def _preprocess_text_dialects(self, txt, lang):
+    if lang.startswith('ch_'):
+        lang = 'de'
+    return _preprocess_text(self, txt, lang)
+
+VoiceBpeTokenizer.preprocess_text = _preprocess_text_dialects
 
 
 def resolve_device(spec: str = "auto") -> torch.device:
