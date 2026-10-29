@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - paths: default
+  - model: gpt_xtts_v2
+
+
+device: auto
+redis_url: ${oc.env:REDIS_URL,redis://localhost:6379/0}
+
+worker:
+  model_id: ${model.id}
+  heartbeat_ttl_seconds: 30
+  recovery_interval_seconds: 30
+  # a sample whose worker crashed this many times is marked failed instead of retried
+  max_deliveries: 3
+  speaker_cache_size: 32
