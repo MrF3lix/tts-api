@@ -8,7 +8,7 @@ import soundfile as sf
 from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 
-from tts_ui.xtts import load_tts, resolve_device
+from tts_api.xtts import load_tts, resolve_device
 
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)

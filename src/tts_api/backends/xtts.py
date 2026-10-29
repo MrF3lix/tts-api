@@ -1,8 +1,8 @@
 import os
 import tempfile
 
-from tts_ui.backends.base import Backend
-from tts_ui.xtts import load_tts
+from tts_api.backends.base import Backend
+from tts_api.xtts import load_tts
 
 
 class XTTSBackend(Backend):

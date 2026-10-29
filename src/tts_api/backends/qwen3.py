@@ -5,7 +5,7 @@ import soundfile as sf
 import torch
 from qwen_tts import Qwen3TTSModel
 
-from tts_ui.backends.base import Backend
+from tts_api.backends.base import Backend
 
 
 log = logging.getLogger(__name__)

@@ -2,7 +2,7 @@
 
 Plan for putting a login-protected web UI in front of the TTS API and keeping selected samples permanently.
 
-- **This repo (`tts-ui`)**: gains an authentication layer, job ownership and an endpoint that saves a sample to PocketBase. Generation (gateway → Redis → workers) stays as it is.
+- **This repo (`tts-api`)**: gains an authentication layer, job ownership and an endpoint that saves a sample to PocketBase. Generation (gateway → Redis → workers) stays as it is.
 - **New repo (frontend)**: a small Next.js app plus the PocketBase setup (schema, migrations, deployment).
 
 The frontend and PocketBase need no GPU and may run on a different server than the DGX Spark. Everything below assumes they can be on separate machines, talking over HTTPS.
@@ -90,7 +90,7 @@ quotas:
 
 Secrets (`PB_SERVICE_PASSWORD`) come from the environment, i.e. a `.env` file next to `compose.yaml` that isn't committed. They never go in the YAML.
 
-### 3.2 New module `src/tts_ui/auth.py`
+### 3.2 New module `src/tts_api/auth.py`
 
 - `User` (dataclass): `id`, `email`, `name`, `via` (`"token"` or `"api_key"`).
 - `PocketBaseClient`: an async `httpx` client for `auth.pocketbase_url`.
@@ -105,7 +105,7 @@ Secrets (`PB_SERVICE_PASSWORD`) come from the environment, i.e. a `.env` file ne
 
 Add `httpx` to the `api` extra.
 
-### 3.3 Changes to `src/tts_ui/api.py`
+### 3.3 Changes to `src/tts_api/api.py`
 
 - [ ] Create the `PocketBaseClient` in `lifespan` and log in the service account.
 - [ ] Require `current_user` on every endpoint except a minimal `GET /health` (`{"status": "ok"}` only). Move worker counts to an authenticated `GET /status`.
@@ -123,7 +123,7 @@ Add `httpx` to the `api` extra.
 - [ ] Optional CORS middleware, enabled only when `auth.cors_origins` is non-empty.
 - [ ] `POST /generate` requires `current_user` too.
 
-### 3.4 Worker changes (`src/tts_ui/worker.py`)
+### 3.4 Worker changes (`src/tts_api/worker.py`)
 
 - [ ] Decrease `tts:user:{owner}:queued` on pickup (the owner comes from the task fields).
 - [ ] Write `s{i}.checkpoint` (see 3.3) when starting a sample.

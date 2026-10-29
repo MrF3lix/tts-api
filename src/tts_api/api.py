@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from omegaconf import DictConfig
 from pydantic import BaseModel
 
-from tts_ui import jobs
+from tts_api import jobs
 
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -57,7 +57,7 @@ def create_app(cfg: DictConfig) -> FastAPI:
         await app.state.r.aclose()
         await app.state.rb.aclose()
 
-    app = FastAPI(title="TTS UI", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="TTS API", version="0.2.0", lifespan=lifespan)
 
     async def worker_count(model: str) -> int:
         return len([k async for k in app.state.r.scan_iter(match=jobs.worker_pattern(model))])

@@ -4,7 +4,7 @@ import torch
 from TTS.api import TTS
 from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
 
-from tts_ui.backends.base import resolve_device  # noqa: F401 (re-exported for the legacy UI)
+from tts_api.backends.base import resolve_device  # noqa: F401 (re-exported for the legacy UI)
 
 
 log = logging.getLogger(__name__)

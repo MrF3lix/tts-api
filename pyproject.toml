@@ -1,5 +1,5 @@
 [project]
-name = "tts-ui"
+name = "tts-api"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -88,10 +88,10 @@ explicit = true
 
 
 [project.scripts]
-tts-ui = "tts_ui:main"
-tts-ui-legacy = "tts_ui.legacy:main"
-tts-ui-api = "tts_ui.api:main"
-tts-ui-worker = "tts_ui.worker:main"
+tts-api = "tts_api:main"
+tts-api-legacy = "tts_api.legacy:main"
+tts-api-gateway = "tts_api.api:main"
+tts-api-worker = "tts_api.worker:main"
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]

@@ -1,10 +1,10 @@
-## TTS UI
+## TTS API
 
 
 Run the legacy UI on a NVIDIA DGX Spark:
 
 ```bash
-uv run --extra legacy --extra cu132 tts-ui-legacy device=cuda
+uv run --extra legacy --extra cu132 tts-api-legacy device=cuda
 ```
 
 
@@ -55,17 +55,17 @@ curl -o out.wav http://localhost:8000/jobs/<id>/samples/0.wav
 Run locally without Docker (needs a Redis at `REDIS_URL`, default `redis://localhost:6379/0`). Use the same extras for both, since `uv run` syncs the shared `.venv` to exactly the extras given:
 
 ```bash
-uv run --extra legacy --extra api --extra cu132 tts-ui-api
+uv run --extra legacy --extra api --extra cu132 tts-api-gateway
 ```
 
 ```bash
-uv run --extra legacy --extra api --extra cu132 tts-ui-worker device=cuda
+uv run --extra legacy --extra api --extra cu132 tts-api-worker device=cuda
 ```
 
 Qwen3-TTS needs a newer transformers than coqui, so its extra conflicts with `legacy` and needs its own environment:
 
 ```bash
-UV_PROJECT_ENVIRONMENT=.venv-qwen uv run --extra qwen --extra api --extra cu132 tts-ui-worker model=qwen3_tts_base device=cuda
+UV_PROJECT_ENVIRONMENT=.venv-qwen uv run --extra qwen --extra api --extra cu132 tts-api-worker model=qwen3_tts_base device=cuda
 ```
 
 ### Run in Docker (DGX Spark)

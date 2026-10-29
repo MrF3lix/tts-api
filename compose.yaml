@@ -1,4 +1,7 @@
 
+# fixed project name: container and volume names don't depend on the checkout folder's name
+name: tts-api
+
 services:
   redis:
     image: redis:7.4-alpine
@@ -17,13 +20,13 @@ services:
       context: .
       args:
         EXTRAS: "--extra api"
-    image: tts-ui-gateway
+    image: tts-api-gateway
     restart: unless-stopped
     ports:
       - "${PORT:-8000}:8000"
     environment:
       REDIS_URL: redis://redis:6379/0
-    command: ["tts-ui-api", "server.host=0.0.0.0", "server.port=8000"]
+    command: ["tts-api-gateway", "server.host=0.0.0.0", "server.port=8000"]
     depends_on:
       redis:
         condition: service_healthy
@@ -38,7 +41,7 @@ services:
       context: .
       args:
         EXTRAS: "--extra legacy --extra api --extra ${TORCH_EXTRA:-cu132}"
-    image: tts-ui-worker
+    image: tts-api-worker
     restart: unless-stopped
     environment:
       REDIS_URL: redis://redis:6379/0
@@ -46,7 +49,7 @@ services:
     volumes:
       # the checkpoint is not baked into the image
       - ./model:/app/model:ro
-    command: ["tts-ui-worker", "device=${DEVICE:-cuda}"]
+    command: ["tts-api-worker", "device=${DEVICE:-cuda}"]
     depends_on:
       redis:
         condition: service_healthy
@@ -64,14 +67,14 @@ services:
       context: .
       args:
         EXTRAS: "--extra qwen --extra api --extra ${TORCH_EXTRA:-cu132}"
-    image: tts-ui-worker-qwen
+    image: tts-api-worker-qwen
     restart: unless-stopped
     environment:
       REDIS_URL: redis://redis:6379/0
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
       - hf-cache:/home/app/.cache/huggingface
-    command: ["tts-ui-worker", "model=qwen3_tts_base", "device=${DEVICE:-cuda}"]
+    command: ["tts-api-worker", "model=qwen3_tts_base", "device=${DEVICE:-cuda}"]
     depends_on:
       redis:
         condition: service_healthy

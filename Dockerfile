@@ -46,4 +46,4 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 USER app
 
-CMD ["tts-ui-api", "server.host=0.0.0.0", "server.port=8000"]
+CMD ["tts-api-gateway", "server.host=0.0.0.0", "server.port=8000"]

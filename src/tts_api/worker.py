@@ -16,8 +16,8 @@ import rootutils
 import soundfile as sf
 from omegaconf import DictConfig
 
-from tts_ui import jobs
-from tts_ui.backends import Backend, load_backend
+from tts_api import jobs
+from tts_api.backends import Backend, load_backend
 
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
