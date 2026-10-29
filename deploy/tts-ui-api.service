@@ -1,0 +1,17 @@
+[Unit]
+Description=TTS UI API (FastAPI)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@PROJECT_DIR@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@PROJECT_DIR@/.venv/bin/tts-ui-api device=@DEVICE@ server.host=@HOST@ server.port=@PORT@
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

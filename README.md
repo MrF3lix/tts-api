@@ -22,3 +22,14 @@ curl -F text="Grüessech mitenand" -F language=ch_be -F speaker_wav=@data/ref.wa
 ```
 
 Endpoints: `GET /health`, `GET /languages`, `POST /generate` (multipart: `text`, `language` code or name, `speaker_wav`) → `audio/wav`.
+
+### Run as a background service (DGX Spark)
+
+Install a systemd service that starts on boot and restarts on failure (asks for sudo):
+
+```bash
+deploy/install-service.sh 8000 cuda cu132
+```
+
+Manage it with `sudo systemctl {status,restart,stop} tts-ui-api`, follow logs with `journalctl -u tts-ui-api -f`.
+After `git pull` or dependency changes, re-run the install script (it re-syncs the env and restarts the service).
