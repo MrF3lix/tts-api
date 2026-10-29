@@ -8,6 +8,7 @@ services:
       - "${PORT:-8000}:8000"
     volumes:
       - ./model:/app/model:ro
+      - ./outputs:/app/outputs:ro
     command: ["device=${DEVICE:-cuda}"]
     deploy:
       resources:
