@@ -25,6 +25,11 @@ legacy = [
     "transformers>=4.33,<4.61",
     "tts==0.22.0",
 ]
+api = [
+    "fastapi>=0.115",
+    "python-multipart>=0.0.9",
+    "uvicorn>=0.30",
+]
 mps = ["torch==2.5.1", "torchaudio==2.5.1"]
 cu126 = ["torch==2.8.0"]
 cu128 = ["torch==2.8.0"]
@@ -79,6 +84,7 @@ explicit = true
 [project.scripts]
 tts-ui = "tts_ui:main"
 tts-ui-legacy = "tts_ui.legacy:main"
+tts-ui-api = "tts_ui.api:main"
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
