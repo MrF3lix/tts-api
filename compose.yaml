@@ -1,0 +1,18 @@
+services:
+  tts-api:
+    build: .
+    image: tts-ui-api
+    container_name: tts-ui-api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ./model:/app/model:ro
+    command: ["device=${DEVICE:-cuda}"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
