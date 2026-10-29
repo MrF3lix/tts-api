@@ -1,3 +1,4 @@
+id: xtts
 model_name: GPT XTTS v2.0
 model_path: ${paths.root_dir}/model/GPT_XTTS_v2.0_SwissGPC_epoch_6_subset_7/
 config_path: ${paths.root_dir}/model/GPT_XTTS_v2.0_SwissGPC_epoch_6_subset_7/config.json

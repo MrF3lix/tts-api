@@ -1,31 +1,21 @@
 import os
+import hashlib
 import logging
+import random
 import tempfile
-import threading
+from collections import OrderedDict
 
 import numpy as np
-import soundfile as sf
 import torch
 from TTS.api import TTS
 from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
+
+from tts_ui.languages import LANG_MAP, INV_LANG_MAP, resolve_language  # noqa: F401 (re-exported for the legacy UI)
 
 
 log = logging.getLogger(__name__)
 
 OUTPUT_SAMPLE_RATE = 24000
-
-LANG_MAP = {
-    'ch_be': 'Bern',
-    'ch_bs': 'Basel',
-    'ch_gr': 'Graubünden',
-    'ch_in': 'Innerschweiz',
-    'ch_os': 'Ostschweiz',
-    'ch_vs': 'Wallis',
-    'ch_zh': 'Zürich',
-    'de': 'Deutsch'
-}
-
-INV_LANG_MAP = {v:k for k,v in LANG_MAP.items()}
 
 
 # stock coqui tokenizer only cleans text for a fixed language list. For the dialects,
@@ -51,15 +41,6 @@ def resolve_device(spec: str = "auto") -> torch.device:
     return torch.device("cpu")
 
 
-def resolve_language(language: str) -> str:
-    """Accept either a language code (ch_be) or its display name (Bern)."""
-    if language in LANG_MAP:
-        return language
-    if language in INV_LANG_MAP:
-        return INV_LANG_MAP[language]
-    raise ValueError(f"Unknown language '{language}', expected one of {list(LANG_MAP)}")
-
-
 def load_tts(model_cfg, device: torch.device) -> TTS:
     log.info(f'Load TTS model {model_cfg.model_name} on {device}')
     tts = TTS(
@@ -72,31 +53,60 @@ def load_tts(model_cfg, device: torch.device) -> TTS:
     return tts
 
 
-def to_mono_float32(data: np.ndarray) -> np.ndarray:
-    if data.ndim > 1:
-        data = data.mean(axis=1)
-    return data.astype(np.float32)
-
-
 class Synthesizer:
-    """Thin wrapper around the coqui model. The model is not safe to call concurrently,
-    so generation is serialized with a lock."""
+    """Runs XTTS directly instead of through tts.tts(), so the speaker conditioning
+    computed from a reference recording can be reused across samples. Not thread-safe;
+    a worker process runs one generation at a time."""
 
-    def __init__(self, tts: TTS):
-        self.tts = tts
+    def __init__(self, tts: TTS, speaker_cache_size: int = 32):
+        self.model = tts.synthesizer.tts_model
+        self.config = tts.synthesizer.tts_config
         self.sample_rate = OUTPUT_SAMPLE_RATE
-        self._lock = threading.Lock()
+        self._speakers: OrderedDict[str, tuple[torch.Tensor, torch.Tensor]] = OrderedDict()
+        self._speaker_cache_size = speaker_cache_size
 
-    def synthesize(self, text: str, speaker_audio: np.ndarray, speaker_sr: int, language: str) -> np.ndarray:
-        lang_tag = resolve_language(language)
-        # XTTS computes the speaker conditioning from a file path, so hand it a clean
-        # 16-bit mono copy of the reference (also avoids decoding issues with 64-bit wavs)
-        fd, speaker_path = tempfile.mkstemp(suffix='.wav')
-        os.close(fd)
+    def _conditioning(self, speaker_wav: bytes):
+        key = hashlib.sha256(speaker_wav).hexdigest()
+        if key in self._speakers:
+            self._speakers.move_to_end(key)
+            return self._speakers[key]
+
+        # get_conditioning_latents only takes a path
+        fd, path = tempfile.mkstemp(suffix='.wav')
         try:
-            sf.write(speaker_path, to_mono_float32(speaker_audio), speaker_sr, subtype='PCM_16')
-            with self._lock:
-                wav = self.tts.tts(text=text, speaker_wav=speaker_path, language=lang_tag, split_sentences=False)
+            with os.fdopen(fd, 'wb') as f:
+                f.write(speaker_wav)
+            latents = self.model.get_conditioning_latents(
+                audio_path=path,
+                gpt_cond_len=self.config.gpt_cond_len,
+                gpt_cond_chunk_len=self.config.gpt_cond_chunk_len,
+                max_ref_length=self.config.max_ref_len,
+                sound_norm_refs=self.config.sound_norm_refs,
+            )
         finally:
-            os.remove(speaker_path)
-        return np.asarray(wav, dtype=np.float32)
+            os.remove(path)
+
+        self._speakers[key] = latents
+        if len(self._speakers) > self._speaker_cache_size:
+            self._speakers.popitem(last=False)
+        return latents
+
+    def synthesize(self, text: str, language: str, speaker_wav: bytes, seed: int | None = None) -> np.ndarray:
+        lang_tag = resolve_language(language)
+        gpt_cond_latent, speaker_embedding = self._conditioning(speaker_wav)
+        if seed is not None:
+            random.seed(seed)
+            np.random.seed(seed % 2**32)
+            torch.manual_seed(seed)
+        out = self.model.inference(
+            text,
+            lang_tag,
+            gpt_cond_latent,
+            speaker_embedding,
+            temperature=self.config.temperature,
+            length_penalty=self.config.length_penalty,
+            repetition_penalty=self.config.repetition_penalty,
+            top_k=self.config.top_k,
+            top_p=self.config.top_p,
+        )
+        return np.asarray(out["wav"], dtype=np.float32).squeeze()

@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1
-ARG TORCH_EXTRA=cu132
+# One Dockerfile for both images; EXTRAS picks what gets installed:
+#   gateway: --extra api                                  (no torch / model code)
+#   worker:  --extra legacy --extra api --extra cu132     (default)
+ARG EXTRAS="--extra legacy --extra api --extra cu132"
 
 FROM python:3.11-slim-bookworm AS builder
-ARG TORCH_EXTRA
+ARG EXTRAS
 COPY --from=ghcr.io/astral-sh/uv:0.12.15 /uv /usr/local/bin/uv
 
 # some coqui TTS dependencies have no prebuilt wheels on every platform
@@ -17,32 +20,26 @@ WORKDIR /app
 # dependencies first, so code changes don't invalidate the (large) torch layer
 COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --extra legacy --extra api --extra ${TORCH_EXTRA}
+    uv sync --frozen --no-install-project ${EXTRAS}
 
 COPY .project-root ./
 COPY src ./src
 COPY configs ./configs
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --extra legacy --extra api --extra ${TORCH_EXTRA}
+    uv sync --frozen ${EXTRAS}
 
 
 FROM python:3.11-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-RUN useradd --create-home --uid 1000 app
+# /app must be writable: Hydra writes its run logs to outputs/ in the working directory
+RUN useradd --create-home --uid 1000 app && mkdir /app && chown app:app /app
 WORKDIR /app
 # the project is installed editable, so configs/ and .project-root are found relative to src/
 COPY --from=builder --chown=app:app /app /app
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1 \
-    NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    PYTHONUNBUFFERED=1
 USER app
-EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
-
-ENTRYPOINT ["tts-ui-api", "server.host=0.0.0.0", "server.port=8000"]
-CMD ["device=cuda"]
+CMD ["tts-ui-api", "server.host=0.0.0.0", "server.port=8000"]

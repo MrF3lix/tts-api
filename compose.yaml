@@ -1,19 +1,64 @@
+
 services:
-  tts-api:
-    build: .
-    image: tts-ui-api
-    container_name: tts-ui-api
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "${REDIS_MAXMEMORY:-4gb}", "--maxmemory-policy", "volatile-ttl"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  gateway:
+    build:
+      context: .
+      args:
+        EXTRAS: "--extra api"
+    image: tts-ui-gateway
     restart: unless-stopped
     ports:
       - "${PORT:-8000}:8000"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    command: ["tts-ui-api", "server.host=0.0.0.0", "server.port=8000"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  xtts-worker:
+    build:
+      context: .
+      args:
+        EXTRAS: "--extra legacy --extra api --extra ${TORCH_EXTRA:-cu132}"
+    image: tts-ui-worker
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
+      # the checkpoint is not baked into the image
       - ./model:/app/model:ro
-      - ./outputs:/app/outputs
-    command: ["device=${DEVICE:-cuda}"]
+    command: ["tts-ui-worker", "device=${DEVICE:-cuda}"]
+    depends_on:
+      redis:
+        condition: service_healthy
     deploy:
+      # each replica loads its own copy of the model; all share the GPU
+      replicas: ${XTTS_WORKERS:-2}
       resources:
         reservations:
           devices:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+volumes:
+  redis-data:

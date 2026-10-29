@@ -3,14 +3,30 @@
 defaults:
   - _self_
   - paths: default
-  - model: gpt_xtts_v2
 
 
-device: auto
+redis_url: ${oc.env:REDIS_URL,redis://localhost:6379/0}
 
 server:
   host: 127.0.0.1
-  port: 7860
+  port: 8000
+
+# model ids the gateway accepts; each one is served by its own workers (configs/worker.yaml)
+models: [xtts]
+default_model: xtts
+
+jobs:
+  default_samples: 3
+  max_samples: 8
+  # per model; beyond this, new jobs are rejected with 429
+  max_queued_samples: 200
+  # how long job state and generated audio are kept in Redis
+  result_ttl_seconds: 86400
+  stream_maxlen: 10000
+  # how often the event stream refreshes queue position / ETA when nothing changes
+  event_interval_seconds: 5
+  events_timeout_seconds: 1800
+  generate_timeout_seconds: 300
 
 limits:
   max_text_chars: 1000

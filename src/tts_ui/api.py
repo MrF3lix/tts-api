@@ -1,24 +1,36 @@
 import io
+import json
 import logging
+import math
+import secrets
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import hydra
+import redis.asyncio as redis
 import rootutils
 import soundfile as sf
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from omegaconf import DictConfig
 from pydantic import BaseModel
 
-from tts_ui.xtts import LANG_MAP, Synthesizer, load_tts, resolve_device, resolve_language
+from tts_ui import jobs
+from tts_ui.languages import LANG_MAP, resolve_language
 
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 CONFIG_PATH = str(Path(__file__).resolve().parents[2] / "configs")
 log = logging.getLogger(__name__)
+
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    # nginx and similar proxies buffer responses by default, which would delay events
+    "X-Accel-Buffering": "no",
+}
 
 
 class Language(BaseModel):
@@ -26,46 +38,83 @@ class Language(BaseModel):
     name: str
 
 
-class Health(BaseModel):
-    status: str
-    model: str
-    device: str
+class ModelInfo(BaseModel):
+    id: str
+    workers: int
 
 
-def create_app(cfg: DictConfig, synthesizer: Synthesizer | None = None) -> FastAPI:
-    """Build the API. Pass a synthesizer to skip model loading (e.g. in tests)."""
+def create_app(cfg: DictConfig) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if synthesizer is None:
-            device = resolve_device(cfg.device)
-            app.state.synthesizer = Synthesizer(load_tts(cfg.model, device))
-            app.state.device = str(device)
-        else:
-            app.state.synthesizer = synthesizer
-            app.state.device = cfg.device
+        app.state.r = redis.Redis.from_url(cfg.redis_url, decode_responses=True)
+        app.state.rb = redis.Redis.from_url(cfg.redis_url)  # binary values (audio)
+        for model in cfg.models:
+            try:
+                await app.state.r.xgroup_create(jobs.task_stream(model), jobs.GROUP, id="0", mkstream=True)
+            except redis.ResponseError as e:
+                if "BUSYGROUP" not in str(e):
+                    raise
         yield
+        await app.state.r.aclose()
+        await app.state.rb.aclose()
 
-    app = FastAPI(title="TTS UI", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="TTS UI", version="0.2.0", lifespan=lifespan)
 
-    @app.get("/health", response_model=Health)
-    def health():
-        return Health(status="ok", model=cfg.model.model_name, device=app.state.device)
+    async def worker_count(model: str) -> int:
+        return len([k async for k in app.state.r.scan_iter(match=jobs.worker_pattern(model))])
 
-    @app.get("/languages", response_model=list[Language])
-    def languages():
-        return [Language(code=code, name=name) for code, name in LANG_MAP.items()]
+    async def load_job(job_id: str) -> dict:
+        fields = await app.state.r.hgetall(jobs.job_key(job_id))
+        if not fields:
+            raise HTTPException(404, "job not found (unknown id or expired)")
+        return fields
 
-    @app.post(
-        "/generate",
-        response_class=Response,
-        responses={200: {"content": {"audio/wav": {}}, "description": "Generated speech as 16-bit WAV"}},
-    )
-    async def generate(
-        text: str = Form(..., description="Text to synthesize"),
-        language: str = Form(..., description="Language code (e.g. ch_be) or name (e.g. Bern)"),
-        speaker_wav: UploadFile = File(..., description="Reference recording of the target speaker"),
-    ):
+    async def job_snapshot(fields: dict) -> dict:
+        """Public job view plus queue position and a rough ETA."""
+        r = app.state.r
+        view = jobs.job_view(fields)
+        model = fields["model"]
+        view["queue_position"] = None
+        view["eta_seconds"] = None
+        if jobs.is_finished(fields):
+            return view
+
+        remaining = view["samples_total"] - sum(s["status"] in jobs.FINISHED for s in view["samples"])
+        ahead = 0
+        if view["status"] == "queued":
+            # tasks between the last one handed to a worker and this job's first task
+            stream = jobs.task_stream(model)
+            groups = await r.xinfo_groups(stream)
+            last_delivered = next((g["last-delivered-id"] for g in groups if g["name"] == jobs.GROUP), "0-0")
+            first_task = fields.get(jobs.sample_field(0, "task_id"))
+            if first_task:
+                ahead = len(await r.xrange(stream, min=f"({last_delivered}", max=f"({first_task}"))
+            view["queue_position"] = ahead
+
+        avg = await r.get(jobs.avg_seconds_key(model))
+        workers = await worker_count(model)
+        if avg is not None and workers:
+            view["eta_seconds"] = math.ceil(math.ceil((ahead + remaining) / workers) * float(avg))
+        return view
+
+    async def read_speaker(upload: UploadFile) -> bytes:
+        try:
+            audio, sr = sf.read(io.BytesIO(await upload.read()), dtype='float32')
+        except Exception:
+            raise HTTPException(422, "speaker_wav could not be decoded as audio")
+        if len(audio) == 0:
+            raise HTTPException(422, "speaker_wav is empty")
+        if len(audio) / sr > cfg.limits.max_speaker_seconds:
+            raise HTTPException(422, f"speaker_wav exceeds {cfg.limits.max_speaker_seconds} seconds")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        # store a clean 16-bit mono copy; also avoids decoding issues with 64-bit wavs in the worker
+        buf = io.BytesIO()
+        sf.write(buf, audio, sr, format='WAV', subtype='PCM_16')
+        return buf.getvalue()
+
+    async def create_job(text, language, speaker_wav, num_samples, model, seed) -> dict:
         text = text.strip()
         if not text:
             raise HTTPException(422, "text must not be empty")
@@ -75,22 +124,167 @@ def create_app(cfg: DictConfig, synthesizer: Synthesizer | None = None) -> FastA
             lang_tag = resolve_language(language)
         except ValueError as e:
             raise HTTPException(422, str(e))
+        model = model or cfg.default_model
+        if model not in cfg.models:
+            raise HTTPException(422, f"Unknown model '{model}', expected one of {list(cfg.models)}")
+        num_samples = num_samples or cfg.jobs.default_samples
+        if not 1 <= num_samples <= cfg.jobs.max_samples:
+            raise HTTPException(422, f"num_samples must be between 1 and {cfg.jobs.max_samples}")
+        speaker = await read_speaker(speaker_wav)
 
+        r = app.state.r
+        # reserve queue capacity first; reject instead of accepting work we can't finish
+        queued = await r.incrby(jobs.queued_key(model), num_samples)
+        if queued > cfg.jobs.max_queued_samples:
+            await r.decrby(jobs.queued_key(model), num_samples)
+            raise HTTPException(429, "queue is full, try again later", headers={"Retry-After": "30"})
+
+        job_id = uuid.uuid4().hex
+        seeds = [seed + i if seed is not None else secrets.randbelow(2**31) for i in range(num_samples)]
+        fields = {
+            "id": job_id, "model": model, "text": text, "language": lang_tag,
+            "samples_total": num_samples, "created_at": time.time(), "cancelled": "0",
+        }
+        for i, s in enumerate(seeds):
+            fields[jobs.sample_field(i, "status")] = "queued"
+            fields[jobs.sample_field(i, "seed")] = s
+
+        ttl = cfg.jobs.result_ttl_seconds
         try:
-            speaker_audio, speaker_sr = sf.read(io.BytesIO(await speaker_wav.read()), dtype='float32')
+            pipe = app.state.rb.pipeline()
+            pipe.hset(jobs.job_key(job_id), mapping=fields)
+            pipe.expire(jobs.job_key(job_id), ttl)
+            pipe.set(jobs.speaker_key(job_id), speaker, ex=ttl)
+            await pipe.execute()
+
+            # the job record exists before any worker can see a task for it
+            pipe = r.pipeline()
+            for i in range(num_samples):
+                pipe.xadd(jobs.task_stream(model), {"job_id": job_id, "index": i},
+                          maxlen=cfg.jobs.stream_maxlen, approximate=True)
+            task_ids = await pipe.execute()
+            await r.hset(jobs.job_key(job_id),
+                         mapping={jobs.sample_field(i, "task_id"): t for i, t in enumerate(task_ids)})
         except Exception:
-            raise HTTPException(422, "speaker_wav could not be decoded as audio")
-        if len(speaker_audio) == 0:
-            raise HTTPException(422, "speaker_wav is empty")
-        if len(speaker_audio) / speaker_sr > cfg.limits.max_speaker_seconds:
-            raise HTTPException(422, f"speaker_wav exceeds {cfg.limits.max_speaker_seconds} seconds")
+            await r.decrby(jobs.queued_key(model), num_samples)
+            raise
+        return await load_job(job_id)
 
-        synth: Synthesizer = app.state.synthesizer
-        wav = await run_in_threadpool(synth.synthesize, text, speaker_audio, speaker_sr, lang_tag)
+    async def wait_for_job(job_id: str, timeout: float):
+        """Yield the job hash on every change until it is finished or the timeout passes."""
+        pubsub = app.state.r.pubsub()
+        # subscribe before reading, so no change between the read and the subscription is missed
+        await pubsub.subscribe(jobs.events_channel(job_id))
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                fields = await load_job(job_id)
+                yield fields
+                if jobs.is_finished(fields) or time.monotonic() > deadline:
+                    return
+                await pubsub.get_message(ignore_subscribe_messages=True,
+                                         timeout=max(0, min(cfg.jobs.event_interval_seconds, deadline - time.monotonic())))
+        finally:
+            await pubsub.unsubscribe()
+            await pubsub.aclose()
 
-        buf = io.BytesIO()
-        sf.write(buf, wav, synth.sample_rate, format='WAV', subtype='PCM_16')
-        return Response(content=buf.getvalue(), media_type="audio/wav")
+    @app.get("/health")
+    async def health():
+        await app.state.r.ping()
+        return {"status": "ok", "workers": {m: await worker_count(m) for m in cfg.models}}
+
+    @app.get("/languages", response_model=list[Language])
+    def languages():
+        return [Language(code=code, name=name) for code, name in LANG_MAP.items()]
+
+    @app.get("/models", response_model=list[ModelInfo])
+    async def models():
+        return [ModelInfo(id=m, workers=await worker_count(m)) for m in cfg.models]
+
+    @app.post("/jobs", status_code=202)
+    async def submit_job(
+        text: str = Form(..., description="Text to synthesize"),
+        language: str = Form(..., description="Language code (e.g. ch_be) or name (e.g. Bern)"),
+        speaker_wav: UploadFile = File(..., description="Reference recording of the target speaker"),
+        num_samples: int | None = Form(None, description="Number of samples to generate (default from config)"),
+        model: str | None = Form(None, description="Model id (see /models)"),
+        seed: int | None = Form(None, description="Base seed; sample i uses seed + i. Random if omitted"),
+    ):
+        fields = await create_job(text, language, speaker_wav, num_samples, model, seed)
+        return JSONResponse(await job_snapshot(fields), status_code=202,
+                            headers={"Location": f"/jobs/{fields['id']}"})
+
+    @app.get("/jobs/{job_id}")
+    async def get_job(job_id: str):
+        view = await job_snapshot(await load_job(job_id))
+        headers = {} if view["status"] in jobs.FINISHED else {"Retry-After": "2"}
+        return JSONResponse(view, headers=headers)
+
+    @app.get("/jobs/{job_id}/events")
+    async def job_events(job_id: str):
+        await load_job(job_id)  # 404 before starting the stream
+
+        async def stream():
+            last = None
+            # the stream stays open as long as the job runs; snapshots also refresh queue position and ETA
+            async for fields in wait_for_job(job_id, timeout=cfg.jobs.events_timeout_seconds):
+                data = json.dumps(await job_snapshot(fields))
+                if data != last:
+                    yield f"event: job\ndata: {data}\n\n"
+                    last = data
+                else:
+                    yield ": keepalive\n\n"
+            yield f"event: end\ndata: {json.dumps({'status': json.loads(last)['status']})}\n\n"
+
+        return StreamingResponse(stream(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+    @app.get("/jobs/{job_id}/samples/{index}.wav", response_class=Response,
+             responses={200: {"content": {"audio/wav": {}}}})
+    async def get_sample(job_id: str, index: int):
+        fields = await load_job(job_id)
+        if not 0 <= index < int(fields["samples_total"]):
+            raise HTTPException(404, "no such sample")
+        status = fields.get(jobs.sample_field(index, "status"))
+        if status != "completed":
+            raise HTTPException(409, f"sample is {status}")
+        audio = await app.state.rb.get(jobs.sample_key(job_id, index))
+        if audio is None:
+            raise HTTPException(404, "sample expired")
+        return Response(content=audio, media_type="audio/wav")
+
+    @app.delete("/jobs/{job_id}")
+    async def cancel_job(job_id: str):
+        """Cancel the samples that haven't started; running samples still finish."""
+        fields = await load_job(job_id)
+        updates = {"cancelled": "1"}
+        for i in range(int(fields["samples_total"])):
+            if fields.get(jobs.sample_field(i, "status")) == "queued":
+                updates[jobs.sample_field(i, "status")] = "cancelled"
+        await app.state.r.hset(jobs.job_key(job_id), mapping=updates)
+        await app.state.r.publish(jobs.events_channel(job_id), "changed")
+        return await job_snapshot(await load_job(job_id))
+
+    @app.post("/generate", response_class=Response,
+              responses={200: {"content": {"audio/wav": {}}, "description": "Generated speech as 16-bit WAV"}})
+    async def generate(
+        text: str = Form(..., description="Text to synthesize"),
+        language: str = Form(..., description="Language code (e.g. ch_be) or name (e.g. Bern)"),
+        speaker_wav: UploadFile = File(..., description="Reference recording of the target speaker"),
+        model: str | None = Form(None, description="Model id (see /models)"),
+        seed: int | None = Form(None),
+    ):
+        """Blocking single-sample generation, kept for simple clients. Runs through the same queue."""
+        fields = await create_job(text, language, speaker_wav, 1, model, seed)
+        job_id = fields["id"]
+        async for fields in wait_for_job(job_id, timeout=cfg.jobs.generate_timeout_seconds):
+            pass
+        status = fields.get(jobs.sample_field(0, "status"))
+        if status == "completed":
+            return await get_sample(job_id, 0)
+        if status == "failed":
+            raise HTTPException(500, f"generation failed: {fields.get(jobs.sample_field(0, 'error'))}")
+        raise HTTPException(504, f"generation did not finish in time; poll /jobs/{job_id}",
+                            headers={"Location": f"/jobs/{job_id}"})
 
     return app
 
