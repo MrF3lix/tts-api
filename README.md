@@ -23,13 +23,15 @@ curl -F text="Grüessech mitenand" -F language=ch_be -F speaker_wav=@data/ref.wa
 
 Endpoints: `GET /health`, `GET /languages`, `POST /generate` (multipart: `text`, `language` code or name, `speaker_wav`) → `audio/wav`.
 
-### Run as a background service (DGX Spark)
+### Run in Docker (DGX Spark)
 
-Install a systemd service that starts on boot and restarts on failure (asks for sudo):
+Requires the NVIDIA Container Toolkit (preinstalled on DGX OS). The checkpoint in `model/` is mounted, not copied into the image.
 
 ```bash
-deploy/install-service.sh 8000 cuda cu132
+docker compose up -d --build
 ```
 
-Manage it with `sudo systemctl {status,restart,stop} tts-ui-api`, follow logs with `journalctl -u tts-ui-api -f`.
-After `git pull` or dependency changes, re-run the install script (it re-syncs the env and restarts the service).
+The container restarts on crash and comes back after a reboot (`restart: unless-stopped`, Docker itself starts on boot).
+Set `PORT` / `DEVICE` in the environment or a `.env` file to override the defaults (`8000`, `cuda`).
+
+Logs: `docker compose logs -f`. Update after `git pull`: `docker compose up -d --build`. Stop for good: `docker compose down`.
