@@ -1,7 +1,4 @@
-
-# fixed project name: container and volume names don't depend on the checkout folder's name
 name: tts-api
-
 services:
   redis:
     image: redis:7.4-alpine
