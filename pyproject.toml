@@ -22,7 +22,9 @@ modern = [
 ]
 legacy = [
     "gradio>=5,<6",
-    "transformers>=4.33,<4.61",
+    # coqui tts 0.22 imports BeamSearchScorer and other generation internals that newer
+    # transformers removed; 4.40.x is the tested version (qwen-tts needs 4.57, hence its own extra)
+    "transformers>=4.33,<4.41",
     "tts==0.22.0",
 ]
 qwen = [
