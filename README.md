@@ -29,7 +29,7 @@ Workers register their model on startup, so `/models` lists what's available. A 
 A job asks for N samples of the same text; each sample is one task, so samples spread over all free workers.
 Job state, progress events and the generated audio live in Redis (kept for 24h by default).
 
-Interactive docs are at `/docs`.
+Interactive docs are at `/docs`. How a client application (e.g. a UI) uses the API is described in [docs/client-integration.md](docs/client-integration.md).
 
 | Endpoint | |
 |---|---|
