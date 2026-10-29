@@ -10,7 +10,7 @@ device: auto
 
 server:
   host: 127.0.0.1
-  port: 8000
+  port: 7860
 
 limits:
   max_text_chars: 1000
