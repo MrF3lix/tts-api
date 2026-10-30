@@ -1,4 +1,28 @@
 name: tts-api
+
+x-xtts-worker: &xtts-worker
+  build:
+    context: .
+    args:
+      EXTRAS: "--extra legacy --extra api --extra ${TORCH_EXTRA:-cu132}"
+  image: tts-api-worker
+  restart: unless-stopped
+  environment:
+    REDIS_URL: redis://redis:6379/0
+    NVIDIA_DRIVER_CAPABILITIES: compute,utility
+  volumes:
+    - ./model:/app/model:ro
+  depends_on:
+    redis:
+      condition: service_healthy
+  deploy: &xtts-deploy
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
 services:
   redis:
     image: redis:7.4-alpine
@@ -33,31 +57,19 @@ services:
       timeout: 5s
       retries: 3
 
-  xtts-worker:
-    build:
-      context: .
-      args:
-        EXTRAS: "--extra legacy --extra api --extra ${TORCH_EXTRA:-cu132}"
-    image: tts-api-worker
-    restart: unless-stopped
-    environment:
-      REDIS_URL: redis://redis:6379/0
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
-    volumes:
-      # the checkpoint is not baked into the image
-      - ./model:/app/model:ro
-    command: ["tts-api-worker", "device=${DEVICE:-cuda}"]
-    depends_on:
-      redis:
-        condition: service_healthy
+  xtts-e3-s7-worker:
+    <<: *xtts-worker
+    command: ["tts-api-worker", "model=gpt_xtts_v2_e3-s7", "device=${DEVICE:-cuda}"]
     deploy:
-      replicas: ${XTTS_WORKERS:-2}
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      <<: *xtts-deploy
+      replicas: ${XTTS_E3_S7_WORKERS:-1}
+
+  xtts-e6-s7-worker:
+    <<: *xtts-worker
+    command: ["tts-api-worker", "model=gpt_xtts_v2_e6-s7", "device=${DEVICE:-cuda}"]
+    deploy:
+      <<: *xtts-deploy
+      replicas: ${XTTS_E6_S7_WORKERS:-1}
 
   qwen-worker:
     build:

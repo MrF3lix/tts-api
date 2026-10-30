@@ -3,9 +3,7 @@ backend: xtts
 model_name: XTTS v2.0
 model_path: ${paths.root_dir}/model/GPT_XTTS_v2.0_SwissGPC_epoch_6_subset_7/
 config_path: ${paths.root_dir}/model/GPT_XTTS_v2.0_SwissGPC_epoch_6_subset_7/config.json
-# XTTS conditions on the reference audio only; a transcript is accepted but not used
 ref_text: ignored
-# language code -> display name; the code is what the model gets
 languages:
   ch_be: Bern
   ch_bs: Basel

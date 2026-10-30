@@ -1,0 +1,8 @@
+defaults:
+  - gpt_xtts_v2
+  - _self_
+
+id: xtts_e3-s7
+model_name: XTTS v2.0 (Epoch 3, Subset 7)
+model_path: ${paths.root_dir}/model/GPT_XTTS_v2.0_SwissGPC_epoch_3_subset_7/
+config_path: ${paths.root_dir}/model/GPT_XTTS_v2.0_SwissGPC_epoch_3_subset_7/config.json
