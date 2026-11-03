@@ -41,7 +41,7 @@ Interactive docs are at `/docs`. How a client application (e.g. a UI) uses the A
 | `POST /generate` | blocking single sample, returns `audio/wav` directly; same fields as `/jobs` except `num_samples` |
 | `GET /models` | registered models with their languages, `ref_text` policy and live worker count |
 | `GET /languages?model=` | languages of one model |
-| `GET /health` | live workers per model |
+| `GET /health` | live workers and queued samples per model |
 
 When more than `jobs.max_queued_samples` (200) samples are waiting for a model, new jobs get `429`.
 

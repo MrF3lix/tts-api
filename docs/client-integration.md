@@ -62,7 +62,7 @@ Build the form from this response instead of hard-coding models. Models appear h
 | `ref_text` | `ignored`: hide the transcript field. `optional`: show it, and say that results are better with it. `required`: show it as mandatory |
 | `workers` | `0` means no worker is running; disable the model or warn that jobs will wait |
 
-`GET /languages?model=<id>` returns only the language list of one model. `GET /health` returns `{"status": "ok", "workers": {"xtts": 2, ...}}` and is a cheap check that the gateway and Redis are up.
+`GET /languages?model=<id>` returns only the language list of one model. `GET /health` returns `{"status": "ok", "workers": {"xtts": 2, ...}, "queued": {"xtts": 5, ...}}` (`queued`: samples waiting for a worker) and is a cheap check that the gateway and Redis are up.
 
 ## 3. Submit a job
 

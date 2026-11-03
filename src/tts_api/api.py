@@ -219,8 +219,16 @@ def create_app(cfg: DictConfig) -> FastAPI:
 
     @app.get("/health")
     async def health():
-        await app.state.r.ping()
-        return {"status": "ok", "workers": {m: await worker_count(m) for m in await registered_models()}}
+        r = app.state.r
+        await r.ping()
+        models = list(await registered_models())
+        queued = await r.mget([jobs.queued_key(m) for m in models]) if models else []
+        return {
+            "status": "ok",
+            "workers": {m: await worker_count(m) for m in models},
+            # samples waiting for a worker; cancelled ones count until a worker skips them
+            "queued": {m: max(0, int(q or 0)) for m, q in zip(models, queued)},
+        }
 
     @app.get("/languages", response_model=list[Language])
     async def languages(model: str | None = None):
